@@ -1,15 +1,80 @@
-variable "service_name" {
-  description = "Name of the Cloud Run service"
+variable "project_id" {
+  description = "The GCP project ID"
   type        = string
 }
 
 variable "region" {
-  description = "Region for the Cloud Run service"
+  description = "The GCP region for the Cloud Run services"
   type        = string
+  default     = "us-central1"
 }
 
-variable "project_id" {
-  description = "GCP project ID"
+variable "cloud_run_services" {
+  description = "List of Cloud Run services to create"
+  type = list(object({
+    service_name          = string
+    service_account       = string
+    container_port        = number
+    execution_environment = optional(string, "EXECUTION_ENVIRONMENT_GEN2")
+    deletion_protection   = optional(bool, false)
+    ingress               = optional(string, "INGRESS_TRAFFIC_ALL")
+    
+    containers = list(object({
+      name      = optional(string)
+      image     = string
+      tag       = optional(string, "latest")
+      env_vars  = optional(list(object({
+        name           = string
+        value          = optional(string)
+        secret_name    = optional(string)
+        secret_version = optional(string, "latest")
+      })), [])
+      resources = optional(object({
+        limits = optional(map(string), {})
+      }), null)
+      volume_mounts = optional(list(object({
+        name       = string
+        mount_path = string
+      })), [])
+    }))
+    
+    volumes = optional(list(object({
+      name = string
+      secret = optional(object({
+        secret_name  = string
+        default_mode = optional(number)
+        items = optional(list(object({
+          path    = string
+          version = optional(string, "latest")
+        })), [])
+      }))
+    })), [])
+    
+    min_instance_count = optional(number, 0)
+    max_instance_count = optional(number, 10)
+    timeout_seconds    = optional(number, 300)
+    cpu_throttling     = optional(bool)
+    startup_cpu_boost  = optional(bool)
+    
+    vpc_access = optional(object({
+      connector = string
+      egress    = optional(string)
+    }))
+    
+    custom_domains = optional(list(string), [])
+    
+    labels      = optional(map(string), {})
+    annotations = optional(map(string), {})
+    
+    iam_bindings = optional(list(object({
+      role    = string
+      members = list(string)
+    })), [])
+  }))
+}
+
+variable "service_name" {
+  description = "Name of the Cloud Run service"
   type        = string
 }
 

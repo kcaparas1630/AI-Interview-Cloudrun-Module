@@ -1,17 +1,19 @@
-resource "google_cloud_run_v2_service" "service" {
+# Loop through and create multiple Cloud Run services
+resource "google_cloud_run_v2_service" "services" {
+  for_each            = { for service in var.cloud_run_services : service.service_name => service }
   project             = var.project_id
-  name                = var.service_name
+  name                = each.value.service_name
   location            = var.region
-  deletion_protection = var.deletion_protection
-  ingress             = var.ingress
+  deletion_protection = try(each.value.deletion_protection, false)
+  ingress             = try(each.value.ingress, "INGRESS_TRAFFIC_ALL")
 
   template {
-    execution_environment = var.execution_environment
-    service_account       = var.service_account
+    execution_environment = try(each.value.execution_environment, "EXECUTION_ENVIRONMENT_GEN2")
+    service_account       = each.value.service_account
 
     # Volumes
     dynamic "volumes" {
-      for_each = var.volumes
+      for_each = try(each.value.volumes, [])
       content {
         name = volumes.value.name
 
@@ -35,15 +37,14 @@ resource "google_cloud_run_v2_service" "service" {
 
     # Containers
     dynamic "containers" {
-      for_each = var.containers
+      for_each = each.value.containers
       content {
         name  = lookup(containers.value, "name", null)
-        # If the tag is "initial", use the default image, otherwise use the image and tag
-        image = contains(keys(containers.value), "tag") && containers.value.tag == "initial" ? "gcr.io/cloudrun/hello" : "${containers.value.image}:${lookup(containers.value, "tag", "latest")}"
+        image = "${containers.value.image}:${lookup(containers.value, "tag", "latest")}"
 
         # Container Port
         ports {
-          container_port = var.container_port
+          container_port = each.value.container_port
         }
 
         # Environment Variables
@@ -86,28 +87,48 @@ resource "google_cloud_run_v2_service" "service" {
 
     # Scaling
     scaling {
-      min_instance_count = var.min_instance_count
-      max_instance_count = var.max_instance_count
+      min_instance_count = try(each.value.min_instance_count, 0)
+      max_instance_count = try(each.value.max_instance_count, 10)
     }
 
     # VPC Access
     dynamic "vpc_access" {
-      for_each = var.vpc_access != null ? [var.vpc_access] : []
+      for_each = try(each.value.vpc_access, null) != null ? [each.value.vpc_access] : []
       content {
         connector = vpc_access.value.connector
         egress    = lookup(vpc_access.value, "egress", null)
       }
     }
+    
+    # Optional CPU throttling, boost and timeout settings
+    cpu_throttling     = try(each.value.cpu_throttling, null)
+    startup_cpu_boost  = try(each.value.startup_cpu_boost, null)
   }
 
-  labels      = var.labels
-  annotations = var.annotations
+  labels      = try(each.value.labels, {})
+  annotations = try(each.value.annotations, {})
+  
+  # Set timeout if specified
+  client {
+    connection_timeout = try(each.value.timeout_seconds, 300)
+  }
 }
 
 # Domain Mappings
 resource "google_cloud_run_domain_mapping" "domain_mappings" {
-  for_each = toset(var.custom_domains)
-  name     = each.value
+  for_each = {
+    for mapping in flatten([
+      for service in var.cloud_run_services : [
+        for domain in try(service.custom_domains, []) : {
+          service_name = service.service_name
+          domain       = domain
+          key          = "${service.service_name}-${domain}"
+        }
+      ]
+    ]) : mapping.key => mapping
+  }
+  
+  name     = each.value.domain
   location = var.region
 
   metadata {
@@ -115,16 +136,28 @@ resource "google_cloud_run_domain_mapping" "domain_mappings" {
   }
 
   spec {
-    route_name = google_cloud_run_v2_service.service.name
+    route_name = google_cloud_run_v2_service.services[each.value.service_name].name
   }
 }
 
 # IAM Bindings
 resource "google_cloud_run_v2_service_iam_binding" "service_iam_bindings" {
-  for_each = { for idx, binding in var.iam_bindings : idx => binding }
+  for_each = {
+    for binding in flatten([
+      for service in var.cloud_run_services : [
+        for idx, binding in try(service.iam_bindings, []) : {
+          service_name = service.service_name
+          role         = binding.role
+          members      = binding.members
+          key          = "${service.service_name}-${idx}"
+        }
+      ]
+    ]) : binding.key => binding
+  }
+  
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_service.service.name
+  name     = google_cloud_run_v2_service.services[each.value.service_name].name
   role     = each.value.role
   members  = each.value.members
 }
