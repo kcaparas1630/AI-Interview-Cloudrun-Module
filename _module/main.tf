@@ -100,18 +100,11 @@ resource "google_cloud_run_v2_service" "services" {
       }
     }
     
-    # Optional CPU throttling, boost and timeout settings
-    cpu_throttling     = try(each.value.cpu_throttling, null)
-    startup_cpu_boost  = try(each.value.startup_cpu_boost, null)
   }
 
   labels      = try(each.value.labels, {})
   annotations = try(each.value.annotations, {})
-  
-  # Set timeout if specified
-  client {
-    connection_timeout = try(each.value.timeout_seconds, 300)
-  }
+
 }
 
 # Domain Mappings
